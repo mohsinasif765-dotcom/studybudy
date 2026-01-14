@@ -1,11 +1,26 @@
+import 'dart:async';
+import 'dart:ui'; 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
-import 'package:studybudy_ai/features/dashboard/screens/home_view.dart';
-import 'package:studybudy_ai/features/history/screens/history_view_screen.dart';
-import 'package:studybudy_ai/features/dashboard/screens/settings_view.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
+
+// Screens
+import 'package:prepvault_ai/features/dashboard/screens/home_view.dart';
+import 'package:prepvault_ai/features/history/screens/history_view_screen.dart';
+import 'package:prepvault_ai/features/dashboard/screens/settings_view.dart';
+import 'package:prepvault_ai/features/store/screens/official_store_screen.dart';
+
+// Services
+import 'package:prepvault_ai/features/history/services/history_service.dart';
+
+// Widgets
+import 'package:prepvault_ai/features/dashboard/widgets/announcement_banner.dart';
+import 'package:prepvault_ai/features/dashboard/widgets/notification_drawer.dart';
+import 'package:prepvault_ai/features/dashboard/widgets/global_alert_listener.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -15,39 +30,66 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  // ===========================================================================
+  // 1️⃣ VARIABLES
+  // ===========================================================================
   int _selectedIndex = 0;
-  bool _isVip = false; // 🌟 VIP Status Track karne ke liye
+  String _currentPlan = 'free'; 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  late final List<Widget> _pages;
 
-  final List<Widget> _pages = [
-    const HomeView(),
-    const HistoryViewScreen(), 
-    const SettingsView(),
-  ];
-
+  // ===========================================================================
+  // 2️⃣ INIT
+  // ===========================================================================
   @override
   void initState() {
     super.initState();
-    _checkVipStatus(); // 🔍 App start hote hi check karo
+    _syncUserProfile();
+    _checkPlanStatus();
+    HistoryService().cleanupOldFailures();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initAdMobSafe();
+    });
+
+    _pages = [
+      HomeView(onSwitchToHistory: () => _onItemTapped(1)),
+      const HistoryViewScreen(), 
+      const OfficialStoreScreen(), 
+      const SettingsView(),
+    ];
   }
 
-  // 🕵️‍♂️ Database se check karega ke user VIP hai ya nahi
-  Future<void> _checkVipStatus() async {
+  Future<void> _initAdMobSafe() async {
+    if (kIsWeb) return;
+    try {
+      await MobileAds.instance.initialize();
+    } catch (e) {
+      debugPrint("⚠️ AdMob Init Failed: $e");
+    }
+  }
+
+  Future<void> _syncUserProfile() async {
+    try {
+      await Supabase.instance.client.functions.invoke('payment-manager', body: {'action': 'sync_profile'});
+    } catch (e) {
+      debugPrint("Sync Failed: $e");
+    }
+  }
+
+  Future<void> _checkPlanStatus() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user != null) {
       try {
         final data = await Supabase.instance.client
-            .from('profiles')
-            .select('is_vip')
-            .eq('id', user.id)
-            .single();
-        
+            .from('profiles').select('plan_id').eq('id', user.id).single();
         if (mounted) {
           setState(() {
-            _isVip = data['is_vip'] ?? false;
+            _currentPlan = (data['plan_id'] as String? ?? 'free').toLowerCase();
           });
         }
       } catch (e) {
-        // Error aye to chup chap ignore karein (User ko pareshan na karein)
+        debugPrint("Plan check error: $e");
       }
     }
   }
@@ -56,171 +98,249 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _selectedIndex = index);
   }
 
-  // 👑 Helper to Check Admin Email
-  bool get _isAdmin {
-    final user = Supabase.instance.client.auth.currentUser;
-    return user?.email == 'mohsinasif765@gmail.com';
-  }
+  // 🛑 ADMIN CHECK REMOVED
 
+  // ===========================================================================
+  // 3️⃣ MODERN UI BUILDER
+  // ===========================================================================
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        
-        // 📱 MOBILE VIEW (< 640px)
-        if (constraints.maxWidth < 640) {
-          return Scaffold(
-            // 🌟 TOP BAR ADDED FOR VIP BADGE
-            appBar: AppBar(
-              title: Text(
-                "StudyBuddy AI", 
-                style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.black)
+    return Stack(
+      children: [
+        // 🔥 A. BACKGROUND GRADIENT
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                const Color(0xFFF8F9FF), 
+                Colors.grey.shade50,
+              ],
+            ),
+          ),
+        ),
+
+        // 🔥 B. MAIN CONTENT
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isMobile = constraints.maxWidth < 640;
+
+            return Scaffold(
+              key: _scaffoldKey, 
+              backgroundColor: Colors.transparent, 
+              extendBody: true, // For Floating NavBar
+              endDrawer: const NotificationDrawer(),
+
+              appBar: PreferredSize(
+                preferredSize: const Size.fromHeight(70),
+                child: _buildModernAppBar(),
               ),
-              backgroundColor: Colors.white,
-              elevation: 0,
-              actions: [
-                if (_isVip) _buildVipBadge(), // 💎 Sirf VIPs ko dikhega
-                const SizedBox(width: 16),
-              ],
-            ),
-            body: _pages[_selectedIndex],
-            
-            // 🛑 ADMIN BUTTON (Floating)
-            floatingActionButton: _isAdmin 
-              ? FloatingActionButton(
-                  onPressed: () => context.go('/admin'),
-                  backgroundColor: Colors.red,
-                  tooltip: "Admin Panel",
-                  child: const Icon(Icons.admin_panel_settings, color: Colors.white),
-                ) 
-              : null,
 
-            bottomNavigationBar: NavigationBar(
-              selectedIndex: _selectedIndex,
-              onDestinationSelected: _onItemTapped,
-              backgroundColor: Colors.white,
-              elevation: 5,
-              indicatorColor: AppColors.primaryStart.withValues(alpha: 0.2),
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home, color: AppColors.primaryStart),
-                  label: 'Home',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.history_outlined),
-                  selectedIcon: Icon(Icons.history, color: AppColors.primaryStart),
-                  label: 'History',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings, color: AppColors.primaryStart),
-                  label: 'Settings',
-                ),
-              ],
-            ),
-          );
-        } 
-        
-        // 💻 TABLET/WEB VIEW (>= 640px)
-        else {
-          return Scaffold(
-            appBar: AppBar(
-              title: Text("StudyBuddy AI", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, color: Colors.black)),
-              backgroundColor: Colors.white,
-              elevation: 0,
-              actions: [
-                if (_isVip) _buildVipBadge(),
-                const SizedBox(width: 20),
-              ],
-            ),
-            // 🛑 ADMIN BUTTON (Floating for Web too)
-            floatingActionButton: _isAdmin 
-              ? FloatingActionButton(
-                  onPressed: () => context.go('/admin'),
-                  backgroundColor: Colors.red,
-                  tooltip: "Admin Panel",
-                  child: const Icon(Icons.admin_panel_settings, color: Colors.white),
-                ) 
-              : null,
-            body: Row(
-              children: [
-                NavigationRail(
-                  selectedIndex: _selectedIndex,
-                  onDestinationSelected: _onItemTapped,
-                  backgroundColor: Colors.white,
-                  labelType: NavigationRailLabelType.all,
-                  selectedLabelTextStyle: GoogleFonts.outfit(
-                    color: AppColors.primaryStart,
-                    fontWeight: FontWeight.bold
+              body: Column(
+                children: [
+                  const AnnouncementBanner(),
+                  Expanded(
+                    child: isMobile 
+                      ? _pages[_selectedIndex] 
+                      : Row( 
+                          children: [
+                            _buildDesktopRail(),
+                            Expanded(child: _pages[_selectedIndex]),
+                          ],
+                        ),
                   ),
-                  unselectedLabelTextStyle: GoogleFonts.outfit(color: Colors.grey),
-                  useIndicator: true,
-                  indicatorColor: AppColors.primaryStart.withValues(alpha: 0.2),
-                  
-                  leading: const SizedBox(height: 20), 
+                ],
+              ),
 
-                  destinations: const [
-                    NavigationRailDestination(
-                      icon: Icon(Icons.home_outlined),
-                      selectedIcon: Icon(Icons.home, color: AppColors.primaryStart),
-                      label: Text('Home'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.history_outlined),
-                      selectedIcon: Icon(Icons.history, color: AppColors.primaryStart),
-                      label: Text('History'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.settings_outlined),
-                      selectedIcon: Icon(Icons.settings, color: AppColors.primaryStart),
-                      label: Text('Settings'),
-                    ),
-                  ],
-                ),
-                const VerticalDivider(thickness: 1, width: 1),
-                Expanded(child: _pages[_selectedIndex]),
-              ],
-            ),
-          );
-        }
-      },
+              // 🛑 ADMIN FAB REMOVED FROM HERE
+              floatingActionButton: null,
+              
+              bottomNavigationBar: isMobile ? _buildFloatingNavBar() : null,
+            );
+          },
+        ),
+
+        const GlobalAlertListener(), 
+      ],
     );
   }
 
-  // 🏆 GOLDEN VIP BADGE WIDGET
-  Widget _buildVipBadge() {
+  // ===========================================================================
+  // 4️⃣ CUSTOM WIDGETS
+  // ===========================================================================
+
+  Widget _buildModernAppBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.only(top: 30, left: 20, right: 20, bottom: 10),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFFD700), Color(0xFFFFA500)], // ✨ Gold Colors
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        color: Colors.white.withValues(alpha: 0.8), 
+        border: Border(bottom: BorderSide(color: Colors.grey.withValues(alpha: 0.1))),
+      ),
+      child: ClipRRect( 
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryStart.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.auto_stories, color: AppColors.primaryStart, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    "PrepVault AI", // ✅ NEW BRANDING
+                    style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.black87)
+                  ),
+                ],
+              ),
+              
+              Row(
+                children: [
+                  _buildPlanBadge(),
+                  const SizedBox(width: 12),
+                  
+                  InkWell(
+                    onTap: () => _scaffoldKey.currentState?.openEndDrawer(),
+                    borderRadius: BorderRadius.circular(50),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.grey.shade200),
+                        color: Colors.white,
+                      ),
+                      child: Stack(
+                        children: [
+                          const Icon(Icons.notifications_outlined, color: Colors.black54, size: 24),
+                          Positioned(
+                            right: 0, top: 0,
+                            child: Container(
+                              width: 8, height: 8, 
+                              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                            ),
+                          )
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-        borderRadius: BorderRadius.circular(20),
+      ),
+    );
+  }
+
+  Widget _buildFloatingNavBar() {
+    return Container(
+      margin: const EdgeInsets.only(left: 20, right: 20, bottom: 25), 
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.black87, 
+        borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: Colors.orange.withOpacity(0.4),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          )
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
         ],
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          const Icon(Icons.workspace_premium, color: Colors.white, size: 16),
-          const SizedBox(width: 6),
-          Text(
-            "VIP MEMBER",
-            style: GoogleFonts.spaceGrotesk(
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              fontSize: 12,
-              letterSpacing: 1,
+          _buildNavItem(0, Icons.home_rounded, Icons.home_outlined, "Home"),
+          _buildNavItem(1, Icons.history_rounded, Icons.history_outlined, "History"),
+          _buildNavItem(2, Icons.storefront_rounded, Icons.storefront_outlined, "Store"),
+          _buildNavItem(3, Icons.settings_rounded, Icons.settings_outlined, "Settings"),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavItem(int index, IconData activeIcon, IconData inactiveIcon, String label) {
+    bool isSelected = _selectedIndex == index;
+    return GestureDetector(
+      onTap: () => _onItemTapped(index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.symmetric(horizontal: isSelected ? 16 : 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white.withValues(alpha: 0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isSelected ? activeIcon : inactiveIcon,
+              color: isSelected ? Colors.white : Colors.white54,
+              size: 24,
             ),
-          ),
+            if (isSelected) ...[
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12
+                ),
+              ),
+            ]
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopRail() {
+    return NavigationRail(
+      selectedIndex: _selectedIndex,
+      onDestinationSelected: _onItemTapped,
+      backgroundColor: Colors.white,
+      labelType: NavigationRailLabelType.all,
+      selectedLabelTextStyle: GoogleFonts.outfit(color: AppColors.primaryStart, fontWeight: FontWeight.bold),
+      unselectedLabelTextStyle: GoogleFonts.outfit(color: Colors.grey),
+      useIndicator: true,
+      indicatorColor: AppColors.primaryStart.withValues(alpha: 0.1),
+      leading: const SizedBox(height: 20),
+      destinations: const [
+        NavigationRailDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: AppColors.primaryStart), label: Text('Home')),
+        NavigationRailDestination(icon: Icon(Icons.history_outlined), selectedIcon: Icon(Icons.history, color: AppColors.primaryStart), label: Text('History')),
+        NavigationRailDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront, color: AppColors.primaryStart), label: Text('Store')),
+        NavigationRailDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings, color: AppColors.primaryStart), label: Text('Settings')),
+      ],
+    );
+  }
+
+  Widget _buildPlanBadge() {
+    if (_currentPlan == 'vip') return _badge(text: "VIP", colors: [const Color(0xFFFFD700), const Color(0xFFFFA500)]);
+    if (_currentPlan == 'pro' || _currentPlan == 'premium') return _badge(text: "PRO", colors: [const Color(0xFF6A11CB), const Color(0xFF2575FC)]);
+    if (_currentPlan == 'mini') return _badge(text: "MINI", colors: [Colors.green, Colors.teal]);
+    return const SizedBox.shrink();
+  }
+
+  Widget _badge({required String text, required List<Color> colors}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: colors),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: colors[0].withValues(alpha: 0.3), blurRadius: 4, offset: const Offset(0, 2))],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.star, color: Colors.white, size: 10),
+          const SizedBox(width: 4),
+          Text(text, style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 10)),
         ],
       ),
     );

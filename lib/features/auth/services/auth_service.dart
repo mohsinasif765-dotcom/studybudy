@@ -1,7 +1,9 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthService {
-  final SupabaseClient _supabase = Supabase.instance.client;
+  // ✅ SAFE FIX: 'final' hata kar 'get' lagaya.
+  // Ab ye 'Lazy Loading' karega (Jab zaroorat hogi tabhi access karega)
+  SupabaseClient get _supabase => Supabase.instance.client;
 
   User? get currentUser => _supabase.auth.currentUser;
 
@@ -9,7 +11,7 @@ class AuthService {
     return await _supabase.auth.signUp(
       email: email,
       password: password,
-      data: {'full_name': fullName}, // Name bhi save hoga
+      data: {'full_name': fullName},
     );
   }
 
@@ -24,7 +26,6 @@ class AuthService {
     await _supabase.auth.signOut();
   }
 
-  // 👇 YEH FUNCTION ADD KAREIN
   Future<void> resetPassword(String email) async {
     await _supabase.auth.resetPasswordForEmail(email);
   }

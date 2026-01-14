@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart'; // Ensure path is correct
+import 'package:prepvault_ai/core/theme/app_colors.dart'; // Ensure path is correct
 
 class PrivacyPolicyScreen extends StatelessWidget {
   const PrivacyPolicyScreen({super.key});
@@ -31,7 +31,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
             const SizedBox(height: 20),
             
             _buildParagraph(
-              "StudyBuddy AI values your privacy deeply. This policy outlines how we collect, use, and protect your data when you use our services."
+              "PrepVault AI values your privacy deeply. This policy outlines how we collect, use, and protect your data when you use our services."
             ),
 
             _buildSectionTitle("1. Data Collection"),

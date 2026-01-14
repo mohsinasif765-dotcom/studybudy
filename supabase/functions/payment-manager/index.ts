@@ -1,177 +1,434 @@
+// ✅ FIX: Using 'npm:' import to avoid Deno/Node compatibility issues
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import Stripe from "https://esm.sh/stripe@12.0.0?target=deno";
+import Stripe from "npm:stripe@^14.21.0";
+
+console.log("🚀 [SYSTEM] Payment Manager Function Initialized - FULL DEBUG MODE");
 
 serve(async (req) => {
-  // CORS Headers
+  // 1. CORS Headers
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, stripe-signature',
   };
 
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  // Pre-flight Check
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
 
   try {
-    // 1. Initialize Supabase
-    const supabaseClient = createClient(
+    // Shared Admin Client (Service Role for DB Writes)
+    const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // 2. Verify User
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-    if (userError || !user) throw new Error("User not authenticated");
+    // ========================================================================
+    // 🕵️ STRIPE WEBHOOK DETECTION
+    // ========================================================================
+    const signature = req.headers.get("Stripe-Signature");
 
-    const { action, planId, interval, platform, receipt, purchaseToken, productId } = await req.json();
-    
-    // Stripe Init
-    const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') as string, { apiVersion: '2022-11-15' });
+    if (signature) {
+      console.log(`\n🔔 [WEBHOOK START] Stripe Event Received.`);
+      console.log(`🔐 [SECURITY] Verifying Signature...`);
 
-    // ==================================================
-    // 🌐 CASE 1: WEB PAYMENT (STRIPE)
-    // ==================================================
-    if (action === 'create_stripe_session') {
-      console.log(`💳 Creating Stripe Session: ${planId} (${interval})`);
-
-      // 👇 REAL STRIPE PRICE IDs (Replace with yours)
-      const prices: Record<string, Record<string, string>> = {
-        'mini': {
-          'month': 'price_mini_month', 
-          'year': 'price_mini_year'
-        },
-        'basic': {
-          'month': 'price_basic_month', 
-          'year': 'price_basic_year'
-        },
-        'pro': {
-          'month': 'price_pro_month', 
-          'year': 'price_pro_year'
-        }
-      };
-
-      // Select ID based on Plan & Interval
-      const selectedPriceId = prices[planId]?.[interval] || prices[planId]?.['month'];
-      if (!selectedPriceId) throw new Error("Price ID not found");
-
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [{ price: selectedPriceId, quantity: 1 }],
-        mode: 'payment', // or 'subscription'
-        success_url: `${req.headers.get('origin')}/dashboard?payment=success`,
-        cancel_url: `${req.headers.get('origin')}/dashboard?payment=cancelled`,
-        customer_email: user.email,
-        metadata: { user_id: user.id, plan_id: planId, interval: interval }
+      // ✅ FIX: Standard Stripe Init for NPM
+      const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") || "", {
+        apiVersion: '2024-06-20',
       });
 
-      return new Response(JSON.stringify({ url: session.url }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+      const body = await req.text();
+      let event;
 
-    // ==================================================
-    // 📱 CASE 2: MOBILE VERIFICATION (Google / Huawei)
-    // ==================================================
-    else if (action === 'verify_mobile_receipt') {
-      console.log(`📲 Verifying ${platform} receipt...`);
-      let isValid = false;
-
-      // 🤖 A. Google Play Verification
-      if (platform === 'google_play') {
-        // Note: Real Google Verification requires OAuth Token generation from Service Account.
-        // Simplified Logic:
-        // 1. Get Access Token (Needs implementation or library)
-        // 2. Call: GET https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{packageName}/purchases/products/{productId}/tokens/{token}
-        
-        // For now, allowing valid if receipt exists (Replace with real logic in production)
-        if (purchaseToken && productId) isValid = true; 
-        
-        /* // Real implementation hint:
-        const accessToken = await getGoogleAccessToken();
-        const res = await fetch(`https://androidpublisher.googleapis.com/...`, { headers: { Authorization: `Bearer ${accessToken}` }});
-        if (res.status === 200) isValid = true;
-        */
-      } 
-      
-      // 🧧 B. Huawei AppGallery Verification
-      else if (platform === 'huawei_appgallery') {
-        const appId = Deno.env.get('HUAWEI_APP_ID');
-        const appSecret = Deno.env.get('HUAWEI_APP_SECRET');
-
-        // 1. Get Access Token
-        const tokenRes = await fetch('https://oauth-login.cloud.huawei.com/oauth2/v3/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `grant_type=client_credentials&client_id=${appId}&client_secret=${appSecret}`
-        });
-        
-        const tokenData = await tokenRes.json();
-        const accessToken = tokenData.access_token;
-
-        if (accessToken) {
-          // 2. Verify Purchase
-          // Use 'purchaseToken' sent from Flutter
-          const verifyRes = await fetch('https://orders-at-dre.iap.dbankcloud.com/applications/purchases/tokens/verify', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${accessToken}` 
-            },
-            body: JSON.stringify({
-              purchaseToken: purchaseToken,
-              productId: productId
-            })
-          });
-          
-          const verifyData = await verifyRes.json();
-          // Check response code (0 usually means success in Huawei)
-          if (verifyData.responseCode === "0") isValid = true;
-        }
-      }
-
-      // ✅ IF VALIDATED -> UPDATE DATABASE
-      if (isValid || true) { // '|| true' is for testing while you setup credentials. REMOVE FOR PROD.
-        
-        const supabaseAdmin = createClient(
-          Deno.env.get('SUPABASE_URL') ?? '',
-          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      try {
+        // Construct Event from Signature
+        event = await stripe.webhooks.constructEventAsync(
+          body,
+          signature,
+          Deno.env.get("STRIPE_WEBHOOK_SIGNING_SECRET")!
         );
-
-        // Credits Logic
-        let credits = 0;
-        if (planId === 'mini') credits = 300;
-        else if (planId === 'basic') credits = 2000;
-        else if (planId === 'pro') credits = 10000;
-
-        // Apply Multiplier for Yearly
-        if (interval === 'year') credits = credits * 12;
-
-        // Get current credits
-        const { data: profile } = await supabaseAdmin.from('profiles').select('credits_total').eq('id', user.id).single();
-        const newTotal = (profile?.credits_total || 0) + credits;
-
-        // Update DB
-        await supabaseAdmin.from('profiles').update({
-          plan_id: planId,
-          credits_total: newTotal,
-          is_vip: planId === 'pro'
-        }).eq('id', user.id);
-
-        return new Response(JSON.stringify({ success: true, message: "Plan activated!" }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      } else {
-        throw new Error("Invalid Receipt/Token");
+        console.log(`✅ [WEBHOOK VALID] Signature Verified. Event Type: ${event.type}`);
+      } catch (err: any) {
+        console.error(`❌ [WEBHOOK ERROR] Signature Verification Failed: ${err.message}`);
+        return new Response(`Webhook Error: ${err.message}`, { status: 400 });
       }
+
+      // --- 1. HANDLE SUCCESSFUL PAYMENT ---
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const sessionId = session.id;
+
+        console.log(`\n💰 [PAYMENT PROCESSING] Session ID: ${sessionId}`);
+        
+        console.log(`🔍 [DEBUG DATA] Raw Metadata from Stripe:`, JSON.stringify(session.metadata, null, 2));
+
+        const userId = session.metadata?.user_id;
+        const planId = session.metadata?.plan_id;
+
+        if (!userId || !planId) {
+            console.error("❌ [CRITICAL FAIL] UserID or PlanID is MISSING in Stripe Metadata.");
+            return new Response("Missing Metadata", { status: 400 });
+        }
+        
+        console.log(`👤 [USER IDENTIFIED] Target User ID: ${userId}`);
+        console.log(`📦 [PLAN IDENTIFIED] Target Plan ID: ${planId}`);
+
+        console.log(`🔍 [DB CHECK] Checking 'processed_payments' to avoid duplicates...`);
+        const { data: existing } = await supabaseAdmin
+          .from('processed_payments')
+          .select('payment_id')
+          .eq('payment_id', sessionId)
+          .single();
+
+        if (existing) {
+          console.log(`✋ [DUPLICATE BLOCKED] Payment ID ${sessionId} already processed.`);
+          return new Response(JSON.stringify({ received: true }), { headers: { "Content-Type": "application/json" } });
+        }
+
+        console.log(`📥 [DB READ] Fetching Plan details from 'plans' table...`);
+        const { data: planData, error: planError } = await supabaseAdmin.from('plans').select('*').eq('id', planId).single();
+        
+        if (planError || !planData) {
+            console.error(`❌ [DB ERROR] Plan '${planId}' not found. Database Error: ${planError?.message}`);
+            throw new Error("Plan not found");
+        }
+        console.log(`✅ [PLAN DATA] Name: ${planData.name} | Credits: ${planData.credits} | Interval: ${planData.interval}`);
+
+        let expiryDate = null;
+        const now = new Date();
+        
+        if (planData.interval === 'week') {
+            console.log("📅 [EXPIRY LOGIC] Weekly Plan Detected. Adding 7 days.");
+            now.setDate(now.getDate() + 7);
+            expiryDate = now.toISOString().split('T')[0];
+        } else if (planData.interval === 'month') {
+            now.setMonth(now.getMonth() + 1);
+            expiryDate = now.toISOString().split('T')[0];
+        } else if (planData.interval === 'year') {
+            now.setFullYear(now.getFullYear() + 1);
+            expiryDate = now.toISOString().split('T')[0];
+        }
+        console.log(`🗓️ [DATE CALC] New Expiry Date Set To: ${expiryDate}`);
+
+        const updateData: any = {
+            credits_total: planData.credits,
+            credits_remaining: planData.credits,
+            credits_used: 0,
+            plan_id: planId,
+            is_vip: false, 
+            credits_expiry: expiryDate,
+            payment_provider: 'stripe'
+        };
+
+        if (session.subscription) {
+            updateData.stripe_subscription_id = session.subscription;
+            updateData.stripe_customer_id = session.customer;
+            console.log(`🔗 [STRIPE SYNC] Linking Subscription ID: ${session.subscription}`);
+        } else {
+             if (session.customer) {
+                 updateData.stripe_customer_id = session.customer;
+             }
+        }
+
+        console.log(`🛠 [DB WRITE] Executing UPDATE on 'profiles' table for User: ${userId}`);
+        
+        const { data: updatedProfile, error: updateError } = await supabaseAdmin
+            .from('profiles')
+            .update(updateData)
+            .eq('id', userId)
+            .select(); 
+
+        if (updateError) {
+            console.error("❌ [DB FATAL ERROR] Profile Update Failed:", updateError.message);
+            throw updateError;
+        } 
+        
+        if (!updatedProfile || updatedProfile.length === 0) {
+            console.error(`⚠️ [CRITICAL WARNING] Query ran successfully but NO ROW WAS UPDATED.`);
+        } else {
+            console.log("✅ [DB SUCCESS] Profile updated successfully!");
+        }
+
+        const alertData = {
+            user_id: userId,
+            title: "Payment Successful! 🎉",
+            message: `Your ${planData.name} plan is now active. ${planData.credits} credits added.`,
+            type: 'vip'
+        };
+        console.log(`🔔 [DB INSERT] Adding User Alert...`);
+        await supabaseAdmin.from('user_alerts').insert(alertData);
+
+        console.log(`🏁 [DB INSERT] Saving to 'processed_payments'...`);
+        await supabaseAdmin.from('processed_payments').insert({
+            payment_id: sessionId,
+            user_id: userId
+        });
+
+        console.log(`✨ [COMPLETE] Payment Processing Finished for ${sessionId}`);
+      }
+
+      // --- 2. HANDLE SUBSCRIPTION DELETED ---
+      if (event.type === 'customer.subscription.deleted') {
+          const subscription = event.data.object;
+          console.log(`📉 [WEBHOOK - CANCEL] Subscription Deleted Event: ${subscription.id}`);
+
+          const { data: userProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('id')
+            .eq('stripe_subscription_id', subscription.id)
+            .single();
+          
+          if (userProfile) {
+              console.log(`👤 [USER FOUND] Downgrading User ID: ${userProfile.id}`);
+              
+              const resetData = {
+                  plan_id: 'free',
+                  is_vip: false,
+                  credits_total: 20, // ✅ Fix: 50 -> 20
+                  credits_remaining: 20, // ✅ Fix: 50 -> 20
+                  credits_used: 0,
+                  credits_expiry: null,
+                  stripe_subscription_id: null
+              };
+
+              await supabaseAdmin.from('profiles').update(resetData).eq('id', userProfile.id);
+              
+              await supabaseAdmin.from('user_alerts').insert({
+                  user_id: userProfile.id,
+                  title: "Plan Expired",
+                  message: "Your subscription has ended.",
+                  type: "info"
+              });
+              console.log(`✅ [CANCEL COMPLETE] User reverted to Free tier.`);
+          }
+      }
+
+      return new Response(JSON.stringify({ received: true }), { headers: { "Content-Type": "application/json" } });
     }
 
-    throw new Error("Invalid Action");
+    // ========================================================================
+    // 🅱️ CLIENT LOGIC (App Request)
+    // ========================================================================
+    else {
+      console.log("\n🚀 [CLIENT REQUEST] API Call Received");
+
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader) throw new Error("Missing Authorization Header");
+
+      const supabaseClient = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+        { global: { headers: { Authorization: authHeader } } }
+      );
+
+      const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
+      if (userError || !user) throw new Error("User not authenticated");
+      
+      console.log(`👤 [AUTH] User Authenticated: ${user.id} (${user.email})`);
+
+      const body = await req.json();
+      const { action, planId, platform, callback_url, is_mobile, purchaseToken, transactionId, method } = body;
+
+      console.log(`📦 [ACTION] Processing action: "${action}"`);
+
+      // --- ACTION: SYNC PROFILE (SMART VERSION) ---
+      if (action === 'sync_profile') {
+          console.log("🔄 [SYNC] Starting Profile Sync Logic...");
+          const today = new Date().toISOString().split('T')[0];
+
+          // 🆕 STEP 1: Using maybeSingle() to handle missing rows
+          let { data: profile, error: fetchError } = await supabaseAdmin
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .maybeSingle();
+          
+          // 🆕 STEP 2: If no profile exists (Anonymous User), create it now
+          if (!profile) {
+              console.log("🆕 [SYNC] No profile found. Creating new entry with 20 credits...");
+              const { data: newProfile, error: insertError } = await supabaseAdmin
+                .from('profiles')
+                .insert({
+                    id: user.id,
+                    email: user.email || null,
+                    plan_id: 'free',
+                    credits_total: 20, // ✅ Fix: 20 Credits
+                    credits_remaining: 20, 
+                    credits_used: 0,
+                    last_reset_date: today,
+                    is_vip: false
+                })
+                .select()
+                .single();
+
+              if (insertError) throw insertError;
+              console.log("✅ [SYNC] New profile created successfully.");
+              return new Response(JSON.stringify({ status: 'created', data: newProfile }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+          }
+
+          let updated = false;
+          let updates: any = {};
+
+          console.log(`📊 [SYNC STATE] Plan: ${profile.plan_id} | Expiry: ${profile.credits_expiry} | Last Reset: ${profile.last_reset_date}`);
+
+          // Expiry Check
+          if (profile.credits_expiry && profile.credits_expiry < today) {
+              console.log("⚠️ [SYNC] Plan has EXPIRED. Downgrading to Free Plan...");
+              updates = { 
+                  plan_id: 'free', 
+                  is_vip: false, 
+                  credits_total: 20, // ✅ Fix: 50 -> 20
+                  credits_remaining: 20, 
+                  credits_used: 0, 
+                  credits_expiry: null, 
+                  last_reset_date: today 
+              };
+              updated = true;
+          } 
+          // Daily Reset (Free Plan)
+          else if (profile.last_reset_date !== today) {
+              console.log("☀️ [SYNC] New Day Detected. Checking daily reset...");
+              updates.last_reset_date = today;
+              if (profile.plan_id === 'free') { 
+                  console.log("ℹ️ [SYNC] Free plan - Refilling 20 credits.");
+                  updates.credits_total = 20; // ✅ Fix: 50 -> 20
+                  updates.credits_remaining = 20; 
+                  updates.credits_used = 0; 
+              }
+              updated = true;
+          }
+          
+          if (updated) {
+              console.log(`🛠 [SYNC] Applying updates to DB...`);
+              await supabaseAdmin.from('profiles').update(updates).eq('id', user.id);
+              const { data: newProfile } = await supabaseAdmin.from('profiles').select('*').eq('id', user.id).single();
+              return new Response(JSON.stringify({ status: 'updated', data: newProfile }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+          }
+          
+          return new Response(JSON.stringify({ status: 'no_change', data: profile }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+      }
+
+      // --- ACTION: CREATE STRIPE SESSION ---
+      if (action === 'create_stripe_session') {
+          console.log(`💳 [STRIPE] Initializing checkout for Plan ID: ${planId}`);
+          const { data: plan } = await supabaseAdmin.from('plans').select('*').eq('id', planId).single();
+          if (!plan) throw new Error("Plan not found");
+
+          const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') as string, {
+             apiVersion: '2024-06-20',
+          });
+
+          let successUrl = 'https://studybudy.ai/payment-success';
+          let cancelUrl = 'https://studybudy.ai/dashboard';
+
+          if (is_mobile === true || platform === 'android' || platform === 'ios') {
+              successUrl = 'studybudy://payment-success';
+              cancelUrl = 'studybudy://dashboard';
+          } else if (callback_url) {
+              successUrl = `${callback_url}/payment-success`;
+              cancelUrl = `${callback_url}/dashboard`;
+          }
+
+          const sessionMode = plan.interval === 'week' ? 'payment' : 'subscription';
+          const session = await stripe.checkout.sessions.create({
+              payment_method_types: ['card'],
+              line_items: [{ price: plan.stripe_price_id, quantity: 1 }],
+              mode: sessionMode, 
+              success_url: successUrl,
+              cancel_url: cancelUrl,
+              customer_email: user.email,
+              client_reference_id: user.id,
+              metadata: { 
+                  user_id: user.id, 
+                  plan_id: planId, 
+                  interval: plan.interval 
+              }
+          });
+
+          return new Response(JSON.stringify({ url: session.url }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+      }
+
+      // --- ACTION: CANCEL SUBSCRIPTION ---
+      if (action === 'cancel_subscription') {
+          console.log("🛑 [CANCEL] Processing cancellation request...");
+          const { data: profile } = await supabaseAdmin.from('profiles').select('stripe_customer_id').eq('id', user.id).single();
+          
+          if (profile?.stripe_customer_id) {
+              try {
+                  const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') as string, { apiVersion: '2024-06-20' });
+                  const subs = await stripe.subscriptions.list({ customer: profile.stripe_customer_id, status: 'active' });
+                  for (const sub of subs.data) { 
+                      await stripe.subscriptions.cancel(sub.id); 
+                  }
+              } catch (e: any) { console.log(`⚠️ [CANCEL WARN] Stripe Error: ${e.message}`); }
+          }
+          
+          const downgradeData = { 
+              plan_id: 'free', 
+              is_vip: false, 
+              credits_total: 20, // ✅ Fix: 50 -> 20
+              credits_remaining: 20, 
+              credits_used: 0, 
+              credits_expiry: null, 
+              payment_provider: null 
+          };
+          
+          await supabaseAdmin.from('profiles').update(downgradeData).eq('id', user.id);
+          return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+      }
+
+      // --- ACTION: VERIFY MOBILE RECEIPT ---
+      if (action === 'verify_mobile_receipt_native') {
+          console.log("📲 [MOBILE] Verifying native purchase...");
+          let query = supabaseAdmin.from('plans').select('*');
+          if (planId) query = query.eq('id', planId);
+          else query = query.eq(platform === 'huawei' ? 'huawei_product_id' : 'google_product_id', body.productId);
+          
+          const { data: plan } = await query.maybeSingle();
+          if (!plan) throw new Error("Plan not found");
+
+          let expiryDate = null;
+          const now = new Date();
+          if (plan.interval === 'week') { now.setDate(now.getDate() + 7); expiryDate = now.toISOString().split('T')[0]; }
+          else if (plan.interval === 'month') { now.setMonth(now.getMonth() + 1); expiryDate = now.toISOString().split('T')[0]; }
+          else if (plan.interval === 'year') { now.setFullYear(now.getFullYear() + 1); expiryDate = now.toISOString().split('T')[0]; }
+
+          const mobileUpdate = { 
+              plan_id: plan.id, 
+              credits_total: plan.credits, 
+              credits_remaining: plan.credits, 
+              is_vip: false, 
+              credits_expiry: expiryDate, 
+              payment_provider: platform 
+          };
+
+          await supabaseAdmin.from('profiles').update(mobileUpdate).eq('id', user.id);
+          return new Response(JSON.stringify({ success: true, plan: plan.name }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+      }
+
+      // --- ACTION: SUBMIT MANUAL PAYMENT ---
+      if (action === 'submit_manual_payment') {
+          console.log("📝 [MANUAL] Submitting manual payment request...");
+          const { data: planData } = await supabaseAdmin.from('plans').select('price').eq('id', planId).single();
+          const manualData = { 
+              user_id: user.id, 
+              plan_id: planId, 
+              transaction_id: transactionId, 
+              status: 'pending', 
+              payment_provider: `manual_${method}`, 
+              amount: planData?.price || 0 
+          };
+
+          await supabaseAdmin.from('payment_requests').insert(manualData);
+          return new Response(JSON.stringify({ status: 'success' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }});
+      }
+
+      throw new Error(`Invalid Action: ${action}`);
+    }
 
   } catch (error: any) {
-    console.error("Payment Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error("🔥 [FATAL ERROR]:", error.message);
+    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 });

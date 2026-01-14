@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
 
 class TranslationSelector extends StatefulWidget {
   final String currentLanguage;
@@ -17,10 +17,11 @@ class TranslationSelector extends StatefulWidget {
 }
 
 class _TranslationSelectorState extends State<TranslationSelector> {
+  // 👇 Updated List with more languages
   final List<String> _languages = [
     'English', 'Urdu', 'Hindi', 'Arabic', 'Spanish', 
     'French', 'German', 'Chinese (Simplified)', 'Portuguese', 'Russian',
-    'Turkish', 'Japanese', 'Korean'
+    'Turkish', 'Japanese', 'Korean', 'Italian', 'Bengali', 'Indonesian', 'Persian'
   ];
 
   String _searchQuery = "";
@@ -29,13 +30,13 @@ class _TranslationSelectorState extends State<TranslationSelector> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     
-    // Filter logic for Search
+    // Filter logic
     final filteredLanguages = _languages
         .where((lang) => lang.toLowerCase().contains(_searchQuery.toLowerCase()))
         .toList();
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.7, // Screen ka 70%
+      height: MediaQuery.of(context).size.height * 0.75, // Thora aur lamba kiya
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkSurface : Colors.white,
@@ -48,7 +49,7 @@ class _TranslationSelectorState extends State<TranslationSelector> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.grey.withValues(alpha: 0.3),
+              color: Colors.grey.withOpacity(0.3),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -80,7 +81,7 @@ class _TranslationSelectorState extends State<TranslationSelector> {
           
           const SizedBox(height: 20),
 
-          // 3. Search Bar (New Feature)
+          // 3. Search Bar
           TextField(
             onChanged: (value) => setState(() => _searchQuery = value),
             decoration: InputDecoration(
@@ -107,37 +108,46 @@ class _TranslationSelectorState extends State<TranslationSelector> {
                 final lang = filteredLanguages[index];
                 final isSelected = widget.currentLanguage == lang;
 
-                return InkWell(
-                  onTap: () {
-                    widget.onSelect(lang);
-                    Navigator.pop(context);
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: isSelected 
-                          ? AppColors.primaryStart.withValues(alpha: 0.1) 
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                      border: isSelected 
-                          ? Border.all(color: AppColors.primaryStart)
-                          : Border.all(color: Colors.transparent),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          lang,
-                          style: GoogleFonts.outfit(
-                            fontSize: 16,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            color: isSelected ? AppColors.primaryStart : (isDark ? Colors.white : Colors.black87),
+                return Material( // 👈 Added Material for better touch response
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      // 👇 DEBUG LOG (Check Console when you tap)
+                      debugPrint("🟢 [UI] User tapped on language: $lang");
+                      
+                      // Action Perform
+                      widget.onSelect(lang);
+                      
+                      // Close
+                      Navigator.pop(context);
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: isSelected 
+                            ? AppColors.primaryStart.withOpacity(0.1) 
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                        border: isSelected 
+                            ? Border.all(color: AppColors.primaryStart)
+                            : Border.all(color: Colors.transparent),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            lang,
+                            style: GoogleFonts.outfit(
+                              fontSize: 16,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              color: isSelected ? AppColors.primaryStart : (isDark ? Colors.white : Colors.black87),
+                            ),
                           ),
-                        ),
-                        if (isSelected)
-                          const Icon(Icons.check_circle, color: AppColors.primaryStart, size: 20),
-                      ],
+                          if (isSelected)
+                            const Icon(Icons.check_circle, color: AppColors.primaryStart, size: 20),
+                        ],
+                      ),
                     ),
                   ),
                 );

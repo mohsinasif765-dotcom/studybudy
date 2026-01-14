@@ -3,8 +3,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
-import 'package:studybudy_ai/features/summary/services/summary_service.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
+import 'package:prepvault_ai/features/summary/services/summary_service.dart';
 
 class SummaryChatDrawer extends StatefulWidget {
   final String documentContext;

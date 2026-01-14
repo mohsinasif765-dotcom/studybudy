@@ -1,175 +1,190 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
-import 'package:studybudy_ai/core/widgets/cyber_button.dart';
-import 'package:studybudy_ai/features/auth/services/auth_service.dart';
+import 'package:hive_flutter/hive_flutter.dart'; // ✅ Hive Import zaroori hai
+import 'package:url_launcher/url_launcher.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
+import 'package:prepvault_ai/core/widgets/cyber_button.dart';
 
-class SignupScreen extends StatefulWidget {
-  const SignupScreen({super.key});
+class SignUpScreen extends StatefulWidget {
+  const SignUpScreen({super.key});
 
   @override
-  State<SignupScreen> createState() => _SignupScreenState();
+  State<SignUpScreen> createState() => _SignUpScreenState();
 }
 
-class _SignupScreenState extends State<SignupScreen> {
-  final _authService = AuthService();
+class _SignUpScreenState extends State<SignUpScreen> {
+  // ===========================================================================
+  // 1️⃣ VARIABLES & CONTROLLERS
+  // ===========================================================================
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  
   bool _isLoading = false;
+  bool _isAgreed = false; 
 
-  Future<void> _handleSignup() async {
-    if (_nameController.text.isEmpty || _emailController.text.isEmpty || _passwordController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all fields")));
+  // ===========================================================================
+  // 2️⃣ SIGN UP LOGIC
+  // ===========================================================================
+  Future<void> _handleSignUp() async {
+    // 1. Validation
+    if (_nameController.text.isEmpty || 
+        _emailController.text.isEmpty || 
+        _passwordController.text.isEmpty) {
+      _showSnack("Please fill in all fields", Colors.orange);
+      return;
+    }
+
+    if (_passwordController.text != _confirmPasswordController.text) {
+      _showSnack("Passwords do not match!", Colors.red);
+      return;
+    }
+
+    if (_passwordController.text.length < 6) {
+      _showSnack("Password must be at least 6 characters long", Colors.orange);
+      return;
+    }
+
+    if (!_isAgreed) {
+      _showSnack("Please agree to the Privacy Policy.", Colors.red);
       return;
     }
 
     setState(() => _isLoading = true);
+
     try {
-      await _authService.signUp(
-        _emailController.text.trim(),
-        _passwordController.text.trim(),
-        _nameController.text.trim(),
+      // 🔥 Step 2: Retrieve Country from Hive (Jo Onboarding man save ki thi)
+      var box = Hive.isBoxOpen('user_prefs') ? Hive.box('user_prefs') : await Hive.openBox('user_prefs');
+      String savedCountry = box.get('target_audience', defaultValue: 'US'); // Default US agar kuch na mile
+
+      // 3. Create Account
+      final response = await Supabase.instance.client.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        data: {
+          'full_name': _nameController.text.trim(),
+          'country': savedCountry, // ✅ Chupke se country save kardi
+        },
       );
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Account Created! Please check email to confirm."), backgroundColor: Colors.green),
-        );
-        context.go('/login');
+
+      if (response.user != null) {
+        if (mounted) {
+          _showSnack("Account Created! 🚀", Colors.green);
+          context.go('/subscription'); 
+        }
       }
+
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+      if (mounted) {
+        String msg = e.toString().toLowerCase();
+        if (msg.contains("already registered")) msg = "Email already exists. Please Log In.";
+        else if (msg.contains("network")) msg = "Check your internet connection.";
+        else msg = "Signup failed. Please try again.";
+        _showSnack(msg, Colors.red);
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final isDesktop = width > 900;
-
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: Row(
-        children: [
-          // 🎨 LEFT SIDE: BRANDING (Desktop Only)
-          if (isDesktop)
-            Expanded(
-              flex: 1,
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [AppColors.primaryStart, AppColors.primaryEnd],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: Stack(
-                  children: [
-                    Positioned(top: -50, left: -50, child: _buildCircle(200)),
-                    Positioned(bottom: -50, right: -50, child: _buildCircle(300)),
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 2)
-                            ),
-                            child: const Icon(Icons.rocket_launch, size: 80, color: Colors.white),
-                          ),
-                          const SizedBox(height: 30),
-                          Text(
-                            "Join the Future",
-                            style: GoogleFonts.spaceGrotesk(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            "Create an account to start your AI learning journey.",
-                            style: GoogleFonts.outfit(fontSize: 18, color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // 📝 RIGHT SIDE: SIGNUP FORM
-          Expanded(
-            flex: 1,
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(32),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 450),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (!isDesktop) ...[
-                        const Center(child: Icon(Icons.auto_awesome, size: 60, color: AppColors.primaryStart)),
-                        const SizedBox(height: 20),
-                      ],
-
-                      Text(
-                        "Create Account",
-                        style: GoogleFonts.spaceGrotesk(fontSize: 32, fontWeight: FontWeight.bold, color: AppColors.textDark),
-                      ),
-                      const SizedBox(height: 8),
-                      Text("Fill in your details to get started.", style: GoogleFonts.outfit(color: Colors.grey, fontSize: 16)),
-                      
-                      const SizedBox(height: 40),
-
-                      _buildTextField(controller: _nameController, label: "Full Name", icon: Icons.person_outline),
-                      const SizedBox(height: 20),
-                      _buildTextField(controller: _emailController, label: "Email Address", icon: Icons.email_outlined),
-                      const SizedBox(height: 20),
-                      _buildTextField(controller: _passwordController, label: "Password", icon: Icons.lock_outline, isPassword: true),
-
-                      const SizedBox(height: 30),
-
-                      CyberButton(
-                        text: "REGISTER NOW",
-                        isLoading: _isLoading,
-                        onPressed: _handleSignup,
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text("Already have an account? ", style: TextStyle(color: Colors.grey)),
-                          GestureDetector(
-                            onTap: () => context.go('/login'),
-                            child: const Text("Log In", style: TextStyle(color: AppColors.primaryStart, fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+  void _showSnack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
 
-  // Helpers
-  Widget _buildCircle(double size) {
-    return Container(
-      width: size, height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.05)),
+  // ===========================================================================
+  // 3️⃣ UI BUILDER
+  // ===========================================================================
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              
+              // 1. LOGO & HEADER
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: AppColors.primaryStart.withValues(alpha: 0.1), shape: BoxShape.circle),
+                child: const Icon(Icons.person_add_rounded, size: 50, color: AppColors.primaryStart),
+              ),
+              const SizedBox(height: 24),
+              Text("Create Account", style: GoogleFonts.spaceGrotesk(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87)),
+              const SizedBox(height: 8),
+              Text("Join us to start your learning journey.", textAlign: TextAlign.center, style: GoogleFonts.outfit(color: Colors.grey.shade600, fontSize: 16)),
+              
+              const SizedBox(height: 40),
+
+              // 2. FORM FIELDS
+              _buildTextField(controller: _nameController, label: "Full Name", icon: Icons.person_outline),
+              const SizedBox(height: 16),
+              _buildTextField(controller: _emailController, label: "Email Address", icon: Icons.email_outlined),
+              const SizedBox(height: 16),
+
+              // ❌ COUNTRY PICKER REMOVED (Successfully)
+
+              _buildTextField(controller: _passwordController, label: "Password", icon: Icons.lock_outline, isPassword: true),
+              const SizedBox(height: 16),
+              _buildTextField(controller: _confirmPasswordController, label: "Confirm Password", icon: Icons.lock_clock_outlined, isPassword: true),
+
+              const SizedBox(height: 20),
+
+              // 3. PRIVACY & BUTTON
+              Row(
+                children: [
+                  SizedBox(
+                    height: 24, width: 24,
+                    child: Checkbox(value: _isAgreed, activeColor: AppColors.primaryStart, onChanged: (val) => setState(() => _isAgreed = val ?? false)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: RichText(
+                      text: TextSpan(
+                        style: GoogleFonts.outfit(fontSize: 14, color: Colors.grey[700]),
+                        children: [
+                          const TextSpan(text: "I agree to "),
+                          TextSpan(
+                            text: "Privacy Policy",
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryStart, decoration: TextDecoration.underline),
+                            recognizer: TapGestureRecognizer()..onTap = () => launchUrl(Uri.parse('https://sites.google.com/view/studybudy-ai/home')),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+
+              SizedBox(
+                width: double.infinity,
+                child: CyberButton(text: "CREATE ACCOUNT", isLoading: _isLoading, onPressed: _handleSignUp),
+              ),
+
+              const SizedBox(height: 20),
+              GestureDetector(
+                onTap: () => context.push('/login'),
+                child: Text("Already have an account? Log In", style: GoogleFonts.outfit(color: Colors.grey.shade600)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -177,15 +192,15 @@ class _SignupScreenState extends State<SignupScreen> {
     return TextField(
       controller: controller,
       obscureText: isPassword,
+      style: GoogleFonts.outfit(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: Colors.grey),
+        labelStyle: TextStyle(color: Colors.black.withValues(alpha: 0.5)),
         prefixIcon: Icon(icon, color: AppColors.primaryStart),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade300)),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primaryStart, width: 2)),
         filled: true,
         fillColor: Colors.grey.shade50,
-        contentPadding: const EdgeInsets.symmetric(vertical: 16),
       ),
     );
   }

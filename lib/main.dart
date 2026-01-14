@@ -1,95 +1,124 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-// 👇 FIX 1: Hide LocalStorage from Supabase to avoid conflict
-import 'package:supabase_flutter/supabase_flutter.dart' hide LocalStorage;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:hive_flutter/hive_flutter.dart'; 
 
-import 'core/theme/app_theme.dart';
-
-// 👇 FIX 2: Correct Router Import (Relative path is fine here)
-import 'router.dart'; 
-
-// 👇 FIX 3: Robust Package Import for LocalStorage
-// Make sure 'studybudy_ai' matches your pubspec.yaml name exactly
-import 'package:studybudy_ai/core/services/local_storage.dart'; 
+// Aapke project imports
+import 'package:prepvault_ai/core/theme/app_theme.dart';
+import 'package:prepvault_ai/router.dart';
+import 'package:prepvault_ai/core/services/hive_storage.dart'; 
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // 1. Bindings Init
+  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
+  // 2. Load Env (Ye zaroori hai Supabase k liye)
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    debugPrint("⚠️ Env load warning: $e");
+  }
+
+  // 3. Initialize Hive (Bas Init, Boxes Splash me open honge)
+  // Yeh is liye zaroori hai taake Supabase HiveLocalStorage ko use kar sake
+  await Hive.initFlutter();
+  
+  // Note: Boxes Splash screen me open honge, lekin Supabase ka auth box
+  // yahan open karna padega agar hum chahte hain ke Supabase init ho jaye.
+  // Lekin aap chahte hain load Splash me ho, to hum Supabase Init bhi wahan shift kar sakte hain
+  // ya phir yahan sirf 'supabase_auth' box open kar lein.
+  
+  // SAFE STRATEGY: Supabase init yahan hi rakhte hain taake Router ko pata ho user logged in hai ya nahi.
+  await Hive.openBox('supabase_auth'); 
 
   try {
-    // 1. Load Environment Variables
-    await dotenv.load(fileName: ".env");
-    debugPrint("✅ .env loaded!"); 
-
-    // 2. Check keys
-    final url = dotenv.env['SUPABASE_URL'];
-    final key = dotenv.env['SUPABASE_ANON_KEY'];
-
-    if (url == null || key == null) {
-      throw Exception("❌ Supabase Keys not found in .env file");
-    }
-
-    // 3. Initialize Supabase
     await Supabase.initialize(
-      url: url,
-      anonKey: key,
-    );
-    debugPrint("✅ Supabase Initialized!");
-
-    // 4. Initialize Local Storage
-    // Agar ye line error de, to App ko STOP karke dobara chalayen
-    await LocalStorage.init(); 
-    debugPrint("✅ LocalStorage Initialized!");
-
-    runApp(const MyApp());
-    
+      url: dotenv.env['SUPABASE_URL'] ?? '', 
+      anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
+      authOptions: const FlutterAuthClientOptions(
+        authFlowType: AuthFlowType.pkce,
+        localStorage: HiveLocalStorage(), 
+      ),
+    ).timeout(const Duration(seconds: 5));
   } catch (e) {
-    debugPrint("🔥 CRITICAL ERROR: $e");
-    runApp(ErrorApp(message: e.toString()));
+    debugPrint("⚠️ Supabase Offline/Error: $e");
   }
+
+  runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp.router(
-      title: 'StudyBuddy AI',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
-      routerConfig: router,
-    );
-  }
+  State<MyApp> createState() => _MyAppState();
 }
 
-class ErrorApp extends StatelessWidget {
-  final String message;
-  const ErrorApp({super.key, required this.message});
+class _MyAppState extends State<MyApp> {
+  StreamSubscription<List<PurchaseDetails>>? _subscription;
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        backgroundColor: Colors.red.shade50,
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, color: Colors.red, size: 50),
-                const SizedBox(height: 10),
-                const Text("Startup Failed", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Text(message, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+  void initState() {
+    super.initState();
+    // 🚀 Heavy plugins load in background after app starts
+    Future.delayed(const Duration(seconds: 2), () {
+      _initHeavyPlugins();
+    });
   }
+
+  Future<void> _initHeavyPlugins() async {
+    if (kIsWeb) return;
+
+    // 1. Try AdMob
+    try {
+      await MobileAds.instance.initialize();
+      debugPrint("✅ AdMob Connected");
+    } catch (e) {
+      debugPrint("❌ AdMob Failed (Ignored): $e");
+    }
+
+    // 2. Try IAP
+    try {
+      final Stream<List<PurchaseDetails>> purchaseUpdated = InAppPurchase.instance.purchaseStream;
+      _subscription = purchaseUpdated.listen((purchaseDetailsList) {
+        _listenToPurchaseUpdated(purchaseDetailsList);
+      }, onError: (error) {
+        debugPrint("❌ IAP Stream Error: $error");
+      });
+      debugPrint("✅ IAP Listener Active");
+    } catch (e) {
+      debugPrint("❌ IAP Init Failed: $e");
+    }
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  void _listenToPurchaseUpdated(List<PurchaseDetails> purchaseDetailsList) {
+    // Payment Logic
+  }
+
+  @override
+Widget build(BuildContext context) {
+  return MaterialApp.router(
+    title: 'PrepVault AI', // Aapka naya brand name
+    debugShowCheckedModeBanner: false,
+    theme: AppTheme.lightTheme,
+    
+    // 🔥 Is line ko 'ThemeMode.light' kar den
+    // Is se mobile ki settings jo bhi hon, app light hi rahegi
+    themeMode: ThemeMode.light, 
+    
+    routerConfig: createRouter(),
+  );
+}
 }

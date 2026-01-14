@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
 
 class TermsConditionsScreen extends StatelessWidget {
   const TermsConditionsScreen({super.key});
@@ -31,7 +31,7 @@ class TermsConditionsScreen extends StatelessWidget {
             const SizedBox(height: 20),
 
             _buildParagraph(
-              "Please read these Terms of Service carefully before using the StudyBuddy AI Service. By using the app, you agree to be bound by these terms."
+              "Please read these Terms of Service carefully before using the PrepVault AI Service. By using the app, you agree to be bound by these terms."
             ),
 
             _buildSectionTitle("1. User Obligations"),
@@ -63,7 +63,7 @@ class TermsConditionsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "AI-generated content (Summaries, Quizzes) may not be 100% accurate. StudyBuddy AI does not guarantee the correctness of the output. Always verify information from your original source material. We are not liable for errors in AI generation.",
+                    "AI-generated content (Summaries, Quizzes) may not be 100% accurate. PrepVault AI does not guarantee the correctness of the output. Always verify information from your original source material. We are not liable for errors in AI generation.",
                     style: GoogleFonts.outfit(fontSize: 14, color: Colors.black87),
                   ),
                 ],

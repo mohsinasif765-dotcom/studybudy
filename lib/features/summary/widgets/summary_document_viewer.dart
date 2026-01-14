@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:studybudy_ai/core/theme/app_colors.dart';
+import 'package:prepvault_ai/core/theme/app_colors.dart';
 
 class SummaryDocumentViewer extends StatelessWidget {
   final String fileName;
@@ -168,7 +168,7 @@ class SummaryDocumentViewer extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  "StudyBuddy AI Generated",
+                  "PrepVault AI Generated",
                   style: GoogleFonts.inter(fontSize: 12, color: Colors.grey.shade500),
                 ),
                 Text(
